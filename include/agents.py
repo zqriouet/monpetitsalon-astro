@@ -3,18 +3,17 @@ import os
 import time
 from urllib.parse import parse_qs, urlparse
 
+# from monpetitsalon.driver import get_driver
+from monpetitsalon.parsers import BaseItemParser, CardItemParser, DetailItemParser
+from monpetitsalon.query import Query
+from monpetitsalon.scrapers import BasePageScraper, CardsPageScraper, DetailsPageScraper
+from monpetitsalon.utils import wait_for_element
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     StaleElementReferenceException,
     TimeoutException,
 )
 from selenium.webdriver.common.by import By
-
-from monpetitsalon.driver import get_driver
-from monpetitsalon.parsers import BaseItemParser, CardItemParser, DetailItemParser
-from monpetitsalon.query import Query
-from monpetitsalon.scrapers import BasePageScraper, CardsPageScraper, DetailsPageScraper
-from monpetitsalon.utils import wait_for_element
 
 
 class BaseNavigationAgent:
