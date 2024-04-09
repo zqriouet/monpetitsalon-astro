@@ -20,7 +20,7 @@ zipcodes = [75, 92, 93, 94]
 
 @dag(
     dag_id="etl",
-    schedule="@monthly",
+    schedule="@hourly",
     start_date=days_ago(0),
     catchup=False,
     tags=["etl"],
@@ -32,7 +32,7 @@ def etl():
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(hours=-1)
+            from_date = pendulum.now("Europe/Paris").add(days=-10)
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
@@ -81,8 +81,8 @@ def etl():
 
     dates = get_extraction_dates()
     extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
-        # rent_sale=["location", "achat"]
-        rent_sale=["location"]
+        rent_sale=["location", "achat"]
+        # rent_sale=["location"]
     ) >> set_extraction_dates(dates)
 
 
