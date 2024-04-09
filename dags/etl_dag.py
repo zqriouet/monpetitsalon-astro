@@ -74,11 +74,11 @@ def etl():
             )
         )
 
-    @task(task_id="etl-locations")
+    @task_group(group_id="etl-locations")
     def extract_locations(zipcodes, dates):
         return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="location")
 
-    @task(task_id="etl-achats")
+    @task_group(group_id="etl-achats")
     def extract_achats(zipcodes, dates):
         return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="achat")
 
