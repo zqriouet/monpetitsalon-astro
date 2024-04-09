@@ -1,11 +1,18 @@
+import time
 from typing import List, Optional
 
 import pendulum
 from airflow.decorators import dag, task, task_group
 from airflow.models import Variable
+from airflow.providers.mongo.hooks.mongo import MongoHook
 from airflow.utils.dates import days_ago
 
-from include import utils_dag
+from include.etl import (
+    insert_many,
+    task_scrape_cards,
+    task_scrape_details,
+    task_store_data,
+)
 
 HEADLESS, REMOTE_HOST = True, None
 zipcodes = [75, 92, 93, 94]
@@ -13,7 +20,7 @@ zipcodes = [75, 92, 93, 94]
 
 @dag(
     dag_id="etl",
-    schedule="@hourly",
+    schedule="@monthly",
     start_date=days_ago(0),
     catchup=False,
     tags=["etl"],
@@ -25,7 +32,7 @@ def etl():
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(hours=-10)
+            from_date = pendulum.now("Europe/Paris").add(hours=-1)
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
@@ -37,17 +44,21 @@ def etl():
         headless: bool = True,
         remote_host: Optional[str] = None,
     ):
-        return utils_dag.task_scrape_cards(
-            rent_sale, zipcodes, dates, headless, remote_host
-        )
+        return task_scrape_cards(rent_sale, zipcodes, dates, headless, remote_host)
 
     @task(task_id="etl-details", retries=3)
     def scrape_details(input: dict):
-        return utils_dag.task_scrape_details(input)
+        return task_scrape_details(input)
 
     @task(task_id="etl-store-data")
     def store_data(input: dict):
-        return utils_dag.task_store_data(input)
+        hook = MongoHook(mongo_conn_id="mongo_default")
+        with hook.get_conn() as client:
+            _ = insert_many(input.get("cards"), client, input.get("rent_sale"), "cards")
+            _ = insert_many(
+                input.get("details"), client, input.get("rent_sale"), "details"
+            )
+        return task_store_data(input)
 
     @task_group(group_id="etl-extract-store-data")
     def extract_store_data(
@@ -65,14 +76,13 @@ def etl():
 
     @task(task_id="set_extraction_dates")
     def set_extraction_dates(dates: dict):
-        pass
         Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
         Variable.set(key="TO_DATE", value=dates["TO_DATE"])
 
     dates = get_extraction_dates()
-    # scrape_cards(zipcodes=zipcodes, rent_sale="rent", dates=dates)
     extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
-        rent_sale=["rent", "sale"]
+        # rent_sale=["location", "achat"]
+        rent_sale=["location"]
     ) >> set_extraction_dates(dates)
 
 

@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -151,15 +150,15 @@ class CardsNavigationAgent(BaseNavigationAgent):
             self.escape_popup_error(driver)
             self.get_page_ct(driver)
 
+    def get_last_listing_modification_date(self, driver):
+        items = self.scrape(driver)
+        last_listing_modification_date = self.parser.parse_modification_date(items[-1])
+        return last_listing_modification_date
+
     def terminated(self, driver, from_date):
         if super().terminated(driver, from_date):
             return True
-        items = self.scrape(driver)
-        last_listing_modification_date = self.parser.parse_modification_date(items[-1])
-        logging.info(
-            "last listing modification date : %s", last_listing_modification_date
-        )
-        return last_listing_modification_date < from_date
+        return self.get_last_listing_modification_date(driver) < from_date
 
 
 class DetailsNavigationAgent(BaseNavigationAgent):
