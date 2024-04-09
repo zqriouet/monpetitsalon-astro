@@ -5,4 +5,4 @@ RUN apt-get update && apt-get install -y wget unzip && \
     apt install -y ./google-chrome-stable_current_amd64.deb && \
     rm google-chrome-stable_current_amd64.deb && \
     apt-get clean
-USER airflow
+USER astro
