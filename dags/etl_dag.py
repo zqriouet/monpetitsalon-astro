@@ -86,7 +86,7 @@ def etl():
     # ) >> set_extraction_dates(dates)
     location = extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="location")
     achat = extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="achat")
-    [location, achat] >> set_extraction_dates(dates)
+    location >> achat >> set_extraction_dates(dates)
 
 
 etl()
