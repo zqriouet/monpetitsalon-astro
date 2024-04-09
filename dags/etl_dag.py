@@ -80,10 +80,17 @@ def etl():
         Variable.set(key="TO_DATE", value=dates["TO_DATE"])
 
     dates = get_extraction_dates()
-    extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
-        rent_sale=["location", "achat"]
-        # rent_sale=["location"]
-    ) >> set_extraction_dates(dates)
+    # extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
+    #     rent_sale=["location", "achat"]
+    #     # rent_sale=["location"]
+    # ) >> set_extraction_dates(dates)
+    location = extract_store_data.partial(
+        zipcodes=zipcodes, dates=dates, rent_sale="location"
+    )
+    achat = extract_store_data.partial(
+        zipcodes=zipcodes, dates=dates, rent_sale="achat"
+    )
+    [location, achat] >> set_extraction_dates(dates)
 
 
 etl()
