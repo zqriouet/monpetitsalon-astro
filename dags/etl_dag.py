@@ -74,20 +74,31 @@ def etl():
             )
         )
 
+    @task(task_id="etl-locations")
+    def extract_locations(zipcodes, dates):
+        return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="location")
+
+    @task(task_id="etl-achats")
+    def extract_achats(zipcodes, dates):
+        return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="achat")
+
     @task(task_id="set_extraction_dates")
     def set_extraction_dates(dates: dict):
         Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
         Variable.set(key="TO_DATE", value=dates["TO_DATE"])
 
-    dates = get_extraction_dates()
+    # dates = get_extraction_dates()
     # extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
     #     rent_sale=["location", "achat"]
     #     # rent_sale=["location"]
     # ) >> set_extraction_dates(dates)
-    location = extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="location")
-    achat = extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="achat")
-    location >> achat
-    achat >> set_extraction_dates(dates)
+
+    dates = get_extraction_dates()
+    (
+        extract_locations(zipcodes=zipcodes, dates=dates)
+        >> extract_achats(zipcodes=zipcodes, dates=dates)
+        >> set_extraction_dates(dates)
+    )
 
 
 etl()
