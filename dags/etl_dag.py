@@ -1,4 +1,3 @@
-import time
 from typing import List, Optional
 
 import pendulum
@@ -6,13 +5,10 @@ from airflow.decorators import dag, task, task_group
 from airflow.models import Variable
 from airflow.providers.mongo.hooks.mongo import MongoHook
 from airflow.utils.dates import days_ago
+from monpetitsalon.query import Query
 
-from include.etl import (
-    insert_many,
-    task_scrape_cards,
-    task_scrape_details,
-    task_store_data,
-)
+from include.agents import CardsNavigationAgent, DetailsNavigationAgent
+from include.etl import extract_cards, extract_details, insert_many
 
 HEADLESS, REMOTE_HOST = True, None
 zipcodes = [75, 92, 93, 94]
@@ -27,40 +23,15 @@ zipcodes = [75, 92, 93, 94]
 )
 def etl():
 
-    @task(task_id="get_extraction_dates")
+    @task(task_id="get-extraction-dates")
     def get_extraction_dates():
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(days=-10)
+            from_date = pendulum.now("Europe/Paris").add(minutes=-0)
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
-    @task(task_id="etl-cards", retries=3)
-    def scrape_cards(
-        rent_sale: str,
-        zipcodes: List[int],
-        dates: dict,
-        headless: bool = True,
-        remote_host: Optional[str] = None,
-    ):
-        return task_scrape_cards(rent_sale, zipcodes, dates, headless, remote_host)
-
-    @task(task_id="etl-details", retries=3)
-    def scrape_details(input: dict):
-        return task_scrape_details(input)
-
-    @task(task_id="etl-store-data")
-    def store_data(input: dict):
-        hook = MongoHook(mongo_conn_id="mongo_default")
-        with hook.get_conn() as client:
-            _ = insert_many(input.get("cards"), client, input.get("rent_sale"), "cards")
-            _ = insert_many(
-                input.get("details"), client, input.get("rent_sale"), "details"
-            )
-        return task_store_data(input)
-
-    @task_group(group_id="etl-extract-store-data")
     def extract_store_data(
         rent_sale: str,
         zipcodes: List[int],
@@ -68,37 +39,176 @@ def etl():
         headless: bool = True,
         remote_host: Optional[str] = None,
     ):
-        return store_data(
-            scrape_details(
-                scrape_cards(rent_sale, zipcodes, dates, headless, remote_host)
+
+        @task_group(group_id=f"extract-store-data-{rent_sale}")
+        def task_group_wrapper():
+
+            @task(task_id=f"etl-scraping-cards-{rent_sale}")
+            def task_scrape_cards(
+                rent_sale: str,
+                zipcodes: List[int],
+                dates: dict,
+                headless: bool = True,
+                remote_host: str | None = None,
+                max_it: int = 2400,
+            ):
+                query = Query(rent_sale, zipcodes, dates.get("FROM_DATE"))
+                cards_agent = CardsNavigationAgent(query, None, max_it)
+                cards, _ = extract_cards(cards_agent, [], 1, headless, remote_host)
+                return {
+                    "cards": cards,
+                    "rent_sale": rent_sale,
+                    "zipcodes": zipcodes,
+                    "dates": dates,
+                    "headless": headless,
+                    "remote_host": remote_host,
+                }
+
+            @task(task_id=f"etl-scraping-details-{rent_sale}")
+            def task_scrape_details(input: dict):
+                query = Query(
+                    input.get("rent_sale"),
+                    input.get("zipcodes"),
+                    input.get("dates").get("FROM_DATE"),
+                )
+                details_agent = DetailsNavigationAgent(
+                    query, None, max_it=2 * len(input.get("cards"))
+                )
+                details_agent.set_page_ct(len(input.get("cards")) + 1)
+                details, _ = extract_details(
+                    details_agent,
+                    [],
+                    1,
+                    input.get("headless"),
+                    input.get("remote_host"),
+                )
+                output = input | {"details": details}
+                return output
+
+            @task(task_id=f"etl-insert-mongodb-{rent_sale}")
+            def task_insert_mongodb(input: dict):
+                hook = MongoHook(mongo_conn_id="mongo_default")
+                with hook.get_conn() as client:
+                    _ = insert_many(input.get("cards"), client, rent_sale, "cards")
+                    _ = insert_many(input.get("details"), client, rent_sale, "details")
+
+            task_insert_mongodb(
+                task_scrape_details(
+                    task_scrape_cards(rent_sale, zipcodes, dates, headless, remote_host)
+                )
             )
-        )
 
-    @task_group(group_id="etl-locations")
-    def extract_locations(zipcodes, dates):
-        return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="location")
+        return task_group_wrapper
 
-    @task_group(group_id="etl-achats")
-    def extract_achats(zipcodes, dates):
-        return extract_store_data(zipcodes=zipcodes, dates=dates, rent_sale="achat")
-
-    @task(task_id="set_extraction_dates")
+    @task(task_id="set-extraction-dates")
     def set_extraction_dates(dates: dict):
         Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
         Variable.set(key="TO_DATE", value=dates["TO_DATE"])
 
-    # dates = get_extraction_dates()
-    # extract_store_data.partial(zipcodes=zipcodes, dates=dates).expand(
-    #     rent_sale=["location", "achat"]
-    #     # rent_sale=["location"]
-    # ) >> set_extraction_dates(dates)
-
     dates = get_extraction_dates()
     (
-        extract_locations(zipcodes=zipcodes, dates=dates)
-        >> extract_achats(zipcodes=zipcodes, dates=dates)
+        extract_store_data("location", zipcodes, dates)()
+        >> extract_store_data("achat", zipcodes, dates)()
         >> set_extraction_dates(dates)
     )
 
 
 etl()
+
+
+"""
+
+
+@dag(
+    dag_id="etl",
+    schedule="@monthly",
+    start_date=days_ago(0),
+    catchup=False,
+    tags=["etl"],
+)
+def etl():
+
+    @task(task_id="get-extraction-dates")
+    def get_extraction_dates():
+        try:
+            from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
+        except KeyError:
+            from_date = pendulum.now("Europe/Paris").add(minutes=-10)
+        to_date = pendulum.now("Europe/Paris")
+        return {"FROM_DATE": from_date, "TO_DATE": to_date}
+
+    @task_group(group_id="extract-store-data")
+    def extract_store_data(
+        rent_sale: str,
+        zipcodes: List[int],
+        dates: dict,
+        headless: bool = True,
+        remote_host: Optional[str] = None,
+    ):
+        @task(task_id=f"etl-scraping-cards-{rent_sale}")
+        def task_scrape_cards(
+            rent_sale: str,
+            zipcodes: List[int],
+            dates: dict,
+            headless: bool = True,
+            remote_host: str | None = None,
+            max_it: int = 2400,
+        ):
+            query = Query(rent_sale, zipcodes, dates.get("FROM_DATE"))
+            cards_agent = CardsNavigationAgent(query, None, max_it)
+            cards, _ = extract_cards(cards_agent, [], 1, headless, remote_host)
+            return {
+                "cards": cards,
+                "rent_sale": rent_sale,
+                "zipcodes": zipcodes,
+                "dates": dates,
+                "headless": headless,
+                "remote_host": remote_host,
+            }
+
+        @task(task_id=f"etl-scraping-details-{rent_sale}")
+        def task_scrape_details(input: dict):
+            query = Query(
+                input.get("rent_sale"),
+                input.get("zipcodes"),
+                input.get("dates").get("FROM_DATE"),
+            )
+            details_agent = DetailsNavigationAgent(
+                query, None, max_it=2 * len(input.get("cards"))
+            )
+            details_agent.set_page_ct(len(input.get("cards")) + 1)
+            details, _ = extract_details(
+                details_agent, [], 1, input.get("headless"), input.get("remote_host")
+            )
+            output = input | {"details": details}
+            return output
+
+        @task(task_id=f"etl-insert-mongodb-{rent_sale}")
+        def task_insert_mongodb(input: dict):
+            hook = MongoHook(mongo_conn_id="mongo_default")
+            with hook.get_conn() as client:
+                _ = insert_many(input.get("cards"), client, rent_sale, "cards")
+                _ = insert_many(input.get("details"), client, rent_sale, "details")
+
+        task_insert_mongodb(
+            task_scrape_details(
+                task_scrape_cards(rent_sale, zipcodes, dates, headless, remote_host)
+            )
+        )
+
+    @task(task_id="set-extraction-dates")
+    def set_extraction_dates(dates: dict):
+        Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
+        Variable.set(key="TO_DATE", value=dates["TO_DATE"])
+
+    dates = get_extraction_dates()
+    (
+        extract_store_data("location", zipcodes, dates)
+        >> extract_store_data("achat", zipcodes, dates)
+        >> set_extraction_dates(dates)
+    )
+
+etl()
+
+
+"""
