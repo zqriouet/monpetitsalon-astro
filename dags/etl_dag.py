@@ -3,6 +3,7 @@ from typing import List, Optional
 import pendulum
 from airflow.decorators import dag, task, task_group
 from airflow.models import Variable
+from airflow.models.param import Param
 from airflow.providers.mongo.hooks.mongo import MongoHook
 from airflow.utils.dates import days_ago
 from monpetitsalon.query import Query
@@ -13,6 +14,13 @@ from include.etl import extract_cards, extract_details, insert_many
 HEADLESS, REMOTE_HOST = True, None
 zipcodes = [75, 92, 93, 94]
 
+params = {
+    "max_retries": Param(10, type="integer", minimum=0, maximum=20),
+    "scrape_over_last_hours": Param(1, type="integer", minimum=0, maximum=240),
+    "sleep_between_cards": Param(1, type="integer", minimum=0, maximum=10),
+    "sleep_between_details": Param(2, type="integer", minimum=0, maximum=10),
+}
+
 
 @dag(
     dag_id="etl",
@@ -20,6 +28,7 @@ zipcodes = [75, 92, 93, 94]
     start_date=days_ago(0),
     catchup=False,
     tags=["etl"],
+    params=params,
 )
 def etl():
 
@@ -28,7 +37,9 @@ def etl():
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(days=-1)
+            from_date = pendulum.now("Europe/Paris").add(
+                days=-params.get("scrape_over_last_hours")
+            )
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
@@ -43,7 +54,10 @@ def etl():
         @task_group(group_id=f"extract-store-data-{rent_sale}")
         def task_group_wrapper():
 
-            @task(task_id=f"etl-scraping-cards-{rent_sale}", retries=3)
+            @task(
+                task_id=f"etl-scraping-cards-{rent_sale}",
+                retries=params.get("max_retries"),
+            )
             def task_scrape_cards(
                 rent_sale: str,
                 zipcodes: List[int],
@@ -54,7 +68,13 @@ def etl():
             ):
                 query = Query(rent_sale, zipcodes, dates.get("FROM_DATE"))
                 cards_agent = CardsNavigationAgent(query, None, max_it)
-                cards, _ = extract_cards(cards_agent, [], 1, headless, remote_host)
+                cards, _ = extract_cards(
+                    cards_agent,
+                    [],
+                    params.get("sleep_between_cards"),
+                    headless,
+                    remote_host,
+                )
                 return {
                     "cards": cards,
                     "rent_sale": rent_sale,
@@ -64,7 +84,10 @@ def etl():
                     "remote_host": remote_host,
                 }
 
-            @task(task_id=f"etl-scraping-details-{rent_sale}", retries=3)
+            @task(
+                task_id=f"etl-scraping-details-{rent_sale}",
+                retries=params.get("max_retries"),
+            )
             def task_scrape_details(input: dict):
                 query = Query(
                     input.get("rent_sale"),
@@ -78,7 +101,7 @@ def etl():
                 details, _ = extract_details(
                     details_agent,
                     [],
-                    1,
+                    params.get("sleep_between_details"),
                     input.get("headless"),
                     input.get("remote_host"),
                 )
