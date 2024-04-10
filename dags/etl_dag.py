@@ -28,7 +28,7 @@ def etl():
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(days=-10)
+            from_date = pendulum.now("Europe/Paris").add(days=-1)
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
@@ -43,7 +43,7 @@ def etl():
         @task_group(group_id=f"extract-store-data-{rent_sale}")
         def task_group_wrapper():
 
-            @task(task_id=f"etl-scraping-cards-{rent_sale}")
+            @task(task_id=f"etl-scraping-cards-{rent_sale}", retries=3)
             def task_scrape_cards(
                 rent_sale: str,
                 zipcodes: List[int],
@@ -64,7 +64,7 @@ def etl():
                     "remote_host": remote_host,
                 }
 
-            @task(task_id=f"etl-scraping-details-{rent_sale}")
+            @task(task_id=f"etl-scraping-details-{rent_sale}", retries=3)
             def task_scrape_details(input: dict):
                 query = Query(
                     input.get("rent_sale"),
