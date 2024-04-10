@@ -23,6 +23,7 @@ params = {
     "sleep_between_details": Param(2, type="integer", minimum=0, maximum=10),
     "max_cards_pages": Param(100, type="integer", minimum=0, maximum=100),
     "max_details": Param(200, type="integer", minimum=0, maximum=2400),
+    "use_dates_variables": Param(True, type="boolean"),
 }
 
 
@@ -39,12 +40,16 @@ def etl():
     @task(task_id="get-extraction-dates")
     def get_extraction_dates():
         context = get_current_context()
-        try:
-            from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
-        except KeyError:
-            from_date = pendulum.now("Europe/Paris").add(
-                hours=-context["params"]["scrape_over_last_n_hours"]
-            )
+        from_date = pendulum.now("Europe/Paris").add(
+            hours=-context["params"]["scrape_over_last_n_hours"]
+        )
+        if context["params"]["use_dates_variables"]:
+            try:
+                from_date = pendulum.parse(
+                    Variable.get(key="TO_DATE"), tz="Europe/Paris"
+                )
+            except KeyError:
+                pass
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
 
@@ -137,8 +142,10 @@ def etl():
 
     @task(task_id="set-extraction-dates")
     def set_extraction_dates(dates: dict):
-        Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
-        Variable.set(key="TO_DATE", value=dates["TO_DATE"])
+        context = get_current_context()
+        if context["params"]["use_dates_variables"]:
+            Variable.set(key="FROM_DATE", value=dates["FROM_DATE"])
+            Variable.set(key="TO_DATE", value=dates["TO_DATE"])
 
     dates = get_extraction_dates()
     (
