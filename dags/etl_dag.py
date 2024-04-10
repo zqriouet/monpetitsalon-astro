@@ -21,6 +21,8 @@ params = {
     "scrape_over_last_n_hours": Param(1, type="integer", minimum=0, maximum=240),
     "sleep_between_cards": Param(1, type="integer", minimum=0, maximum=10),
     "sleep_between_details": Param(2, type="integer", minimum=0, maximum=10),
+    "max_cards_pages": Param(100, type="integer", minimum=0, maximum=100),
+    "max_details": Param(200, type="integer", minimum=0, maximum=2400),
 }
 
 
@@ -68,12 +70,13 @@ def etl():
                 dates: dict,
                 headless: bool = True,
                 remote_host: str | None = None,
-                max_it: int = 2400,
             ):
 
                 context = get_current_context()
                 query = Query(rent_sale, zipcodes, dates.get("FROM_DATE"))
-                cards_agent = CardsNavigationAgent(query, None, max_it)
+                cards_agent = CardsNavigationAgent(
+                    query, None, context["params"]["max_cards_pages"]
+                )
                 cards, _ = extract_cards(
                     cards_agent,
                     [],
@@ -104,7 +107,7 @@ def etl():
                     input.get("dates").get("FROM_DATE"),
                 )
                 details_agent = DetailsNavigationAgent(
-                    query, None, max_it=2 * len(input.get("cards"))
+                    query, None, context["params"]["max_details"] + 20
                 )
                 details_agent.set_page_ct(len(input.get("cards")) + 1)
                 details, _ = extract_details(
