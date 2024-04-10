@@ -4,6 +4,7 @@ import pendulum
 from airflow.decorators import dag, task, task_group
 from airflow.models import Variable
 from airflow.models.param import Param
+from airflow.operators.python import get_current_context
 from airflow.providers.mongo.hooks.mongo import MongoHook
 from airflow.utils.dates import days_ago
 from monpetitsalon.query import Query
@@ -14,9 +15,10 @@ from include.etl import extract_cards, extract_details, insert_many
 HEADLESS, REMOTE_HOST = True, None
 zipcodes = [75, 92, 93, 94]
 
+max_retries = 3
+retry_delay = pendulum.duration(seconds=10)
 params = {
-    "max_retries": Param(10, type="integer", minimum=0, maximum=20),
-    "scrape_over_last_hours": Param(1, type="integer", minimum=0, maximum=240),
+    "scrape_over_last_n_hours": Param(1, type="integer", minimum=0, maximum=240),
     "sleep_between_cards": Param(1, type="integer", minimum=0, maximum=10),
     "sleep_between_details": Param(2, type="integer", minimum=0, maximum=10),
 }
@@ -34,11 +36,12 @@ def etl():
 
     @task(task_id="get-extraction-dates")
     def get_extraction_dates():
+        context = get_current_context()
         try:
             from_date = pendulum.parse(Variable.get(key="TO_DATE"), tz="Europe/Paris")
         except KeyError:
             from_date = pendulum.now("Europe/Paris").add(
-                days=-params.get("scrape_over_last_hours")
+                hours=-context["params"]["scrape_over_last_n_hours"]
             )
         to_date = pendulum.now("Europe/Paris")
         return {"FROM_DATE": from_date, "TO_DATE": to_date}
@@ -56,7 +59,8 @@ def etl():
 
             @task(
                 task_id=f"etl-scraping-cards-{rent_sale}",
-                retries=params.get("max_retries"),
+                retries=max_retries,
+                retry_delay=retry_delay,
             )
             def task_scrape_cards(
                 rent_sale: str,
@@ -66,12 +70,14 @@ def etl():
                 remote_host: str | None = None,
                 max_it: int = 2400,
             ):
+
+                context = get_current_context()
                 query = Query(rent_sale, zipcodes, dates.get("FROM_DATE"))
                 cards_agent = CardsNavigationAgent(query, None, max_it)
                 cards, _ = extract_cards(
                     cards_agent,
                     [],
-                    params.get("sleep_between_cards"),
+                    context["params"]["sleep_between_cards"],
                     headless,
                     remote_host,
                 )
@@ -86,9 +92,12 @@ def etl():
 
             @task(
                 task_id=f"etl-scraping-details-{rent_sale}",
-                retries=params.get("max_retries"),
+                retries=max_retries,
+                retry_delay=retry_delay,
             )
             def task_scrape_details(input: dict):
+
+                context = get_current_context()
                 query = Query(
                     input.get("rent_sale"),
                     input.get("zipcodes"),
@@ -101,7 +110,7 @@ def etl():
                 details, _ = extract_details(
                     details_agent,
                     [],
-                    params.get("sleep_between_details"),
+                    context["params"]["sleep_between_details"],
                     input.get("headless"),
                     input.get("remote_host"),
                 )
