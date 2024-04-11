@@ -112,7 +112,7 @@ def etl():
                     input.get("dates").get("FROM_DATE"),
                 )
                 details_agent = DetailsNavigationAgent(
-                    query, None, context["params"]["max_details"] + 20
+                    query, None, context["params"]["max_details"]
                 )
                 details_agent.set_page_ct(len(input.get("cards")) + 1)
                 details, _ = extract_details(
